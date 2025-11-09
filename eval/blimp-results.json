@@ -1,0 +1,409 @@
+{
+  "adjunct_island": {
+    "total": 200,
+    "correct": 122,
+    "accuracy": 0.61,
+    "avg_margin": 0.05706836700439453
+  },
+  "anaphor_gender_agreement": {
+    "total": 200,
+    "correct": 44,
+    "accuracy": 0.22,
+    "avg_margin": -0.21945433139801027
+  },
+  "anaphor_number_agreement": {
+    "total": 200,
+    "correct": 114,
+    "accuracy": 0.57,
+    "avg_margin": 0.11355334043502807
+  },
+  "animate_subject_passive": {
+    "total": 200,
+    "correct": 121,
+    "accuracy": 0.605,
+    "avg_margin": 0.06802131175994873
+  },
+  "animate_subject_trans": {
+    "total": 200,
+    "correct": 57,
+    "accuracy": 0.285,
+    "avg_margin": -0.2778033351898193
+  },
+  "causative": {
+    "total": 200,
+    "correct": 81,
+    "accuracy": 0.405,
+    "avg_margin": -0.08754837274551391
+  },
+  "complex_NP_island": {
+    "total": 200,
+    "correct": 91,
+    "accuracy": 0.455,
+    "avg_margin": -0.04408191204071045
+  },
+  "coordinate_structure_constraint_complex_left_branch": {
+    "total": 200,
+    "correct": 63,
+    "accuracy": 0.315,
+    "avg_margin": -0.15120009899139406
+  },
+  "coordinate_structure_constraint_object_extraction": {
+    "total": 200,
+    "correct": 93,
+    "accuracy": 0.465,
+    "avg_margin": 0.0021152353286743165
+  },
+  "determiner_noun_agreement_1": {
+    "total": 200,
+    "correct": 132,
+    "accuracy": 0.66,
+    "avg_margin": 0.10268042087554932
+  },
+  "determiner_noun_agreement_2": {
+    "total": 200,
+    "correct": 138,
+    "accuracy": 0.69,
+    "avg_margin": 0.10729673147201538
+  },
+  "determiner_noun_agreement_irregular_1": {
+    "total": 200,
+    "correct": 116,
+    "accuracy": 0.58,
+    "avg_margin": 0.07857715129852295
+  },
+  "determiner_noun_agreement_irregular_2": {
+    "total": 200,
+    "correct": 137,
+    "accuracy": 0.685,
+    "avg_margin": 0.13198031902313231
+  },
+  "determiner_noun_agreement_with_adj_2": {
+    "total": 200,
+    "correct": 128,
+    "accuracy": 0.64,
+    "avg_margin": 0.07253257036209107
+  },
+  "determiner_noun_agreement_with_adj_irregular_1": {
+    "total": 200,
+    "correct": 125,
+    "accuracy": 0.625,
+    "avg_margin": 0.06692069292068481
+  },
+  "determiner_noun_agreement_with_adj_irregular_2": {
+    "total": 200,
+    "correct": 141,
+    "accuracy": 0.705,
+    "avg_margin": 0.09407065391540527
+  },
+  "determiner_noun_agreement_with_adjective_1": {
+    "total": 200,
+    "correct": 117,
+    "accuracy": 0.585,
+    "avg_margin": 0.06170704126358032
+  },
+  "distractor_agreement_relational_noun": {
+    "total": 200,
+    "correct": 118,
+    "accuracy": 0.59,
+    "avg_margin": 0.022891261577606202
+  },
+  "distractor_agreement_relative_clause": {
+    "total": 200,
+    "correct": 97,
+    "accuracy": 0.485,
+    "avg_margin": -0.02729743242263794
+  },
+  "drop_argument": {
+    "total": 200,
+    "correct": 80,
+    "accuracy": 0.4,
+    "avg_margin": -0.1315963101387024
+  },
+  "ellipsis_n_bar_1": {
+    "total": 200,
+    "correct": 91,
+    "accuracy": 0.455,
+    "avg_margin": -0.0127937650680542
+  },
+  "ellipsis_n_bar_2": {
+    "total": 200,
+    "correct": 100,
+    "accuracy": 0.5,
+    "avg_margin": -0.013666136264801025
+  },
+  "existential_there_object_raising": {
+    "total": 200,
+    "correct": 129,
+    "accuracy": 0.645,
+    "avg_margin": 0.09969981670379639
+  },
+  "existential_there_quantifiers_1": {
+    "total": 200,
+    "correct": 197,
+    "accuracy": 0.985,
+    "avg_margin": 0.6153667116165161
+  },
+  "existential_there_quantifiers_2": {
+    "total": 200,
+    "correct": 50,
+    "accuracy": 0.25,
+    "avg_margin": -0.23969729185104371
+  },
+  "existential_there_subject_raising": {
+    "total": 200,
+    "correct": 133,
+    "accuracy": 0.665,
+    "avg_margin": 0.157834210395813
+  },
+  "expletive_it_object_raising": {
+    "total": 200,
+    "correct": 118,
+    "accuracy": 0.59,
+    "avg_margin": 0.11112027645111083
+  },
+  "inchoative": {
+    "total": 200,
+    "correct": 62,
+    "accuracy": 0.31,
+    "avg_margin": -0.24666478157043456
+  },
+  "intransitive": {
+    "total": 200,
+    "correct": 67,
+    "accuracy": 0.335,
+    "avg_margin": -0.1907866144180298
+  },
+  "irregular_past_participle_adjectives": {
+    "total": 200,
+    "correct": 193,
+    "accuracy": 0.965,
+    "avg_margin": 0.2270415186882019
+  },
+  "irregular_past_participle_verbs": {
+    "total": 200,
+    "correct": 77,
+    "accuracy": 0.385,
+    "avg_margin": -0.020430037975311278
+  },
+  "irregular_plural_subject_verb_agreement_1": {
+    "total": 200,
+    "correct": 137,
+    "accuracy": 0.685,
+    "avg_margin": 0.1255882954597473
+  },
+  "irregular_plural_subject_verb_agreement_2": {
+    "total": 200,
+    "correct": 125,
+    "accuracy": 0.625,
+    "avg_margin": 0.1329323410987854
+  },
+  "left_branch_island_echo_question": {
+    "total": 200,
+    "correct": 112,
+    "accuracy": 0.56,
+    "avg_margin": 0.04605350971221924
+  },
+  "left_branch_island_simple_question": {
+    "total": 200,
+    "correct": 71,
+    "accuracy": 0.355,
+    "avg_margin": -0.1176138710975647
+  },
+  "matrix_question_npi_licensor_present": {
+    "total": 200,
+    "correct": 14,
+    "accuracy": 0.07,
+    "avg_margin": -0.6463143038749695
+  },
+  "npi_present_1": {
+    "total": 200,
+    "correct": 135,
+    "accuracy": 0.675,
+    "avg_margin": 0.17099189519882202
+  },
+  "npi_present_2": {
+    "total": 200,
+    "correct": 142,
+    "accuracy": 0.71,
+    "avg_margin": 0.22789683818817139
+  },
+  "only_npi_licensor_present": {
+    "total": 200,
+    "correct": 66,
+    "accuracy": 0.33,
+    "avg_margin": -0.04766560554504395
+  },
+  "only_npi_scope": {
+    "total": 200,
+    "correct": 72,
+    "accuracy": 0.36,
+    "avg_margin": -0.04120532035827637
+  },
+  "passive_1": {
+    "total": 200,
+    "correct": 129,
+    "accuracy": 0.645,
+    "avg_margin": 0.12031011581420899
+  },
+  "passive_2": {
+    "total": 200,
+    "correct": 110,
+    "accuracy": 0.55,
+    "avg_margin": 0.06290432691574097
+  },
+  "principle_A_c_command": {
+    "total": 200,
+    "correct": 129,
+    "accuracy": 0.645,
+    "avg_margin": 0.1010123586654663
+  },
+  "principle_A_case_1": {
+    "total": 200,
+    "correct": 200,
+    "accuracy": 1.0,
+    "avg_margin": 0.5340766716003418
+  },
+  "principle_A_case_2": {
+    "total": 200,
+    "correct": 120,
+    "accuracy": 0.6,
+    "avg_margin": 0.05330549240112305
+  },
+  "principle_A_domain_1": {
+    "total": 200,
+    "correct": 187,
+    "accuracy": 0.935,
+    "avg_margin": 0.22975754976272583
+  },
+  "principle_A_domain_2": {
+    "total": 200,
+    "correct": 122,
+    "accuracy": 0.61,
+    "avg_margin": 0.05253446817398071
+  },
+  "principle_A_domain_3": {
+    "total": 200,
+    "correct": 105,
+    "accuracy": 0.525,
+    "avg_margin": 0.015266344547271729
+  },
+  "principle_A_reconstruction": {
+    "total": 200,
+    "correct": 118,
+    "accuracy": 0.59,
+    "avg_margin": 0.03297483205795288
+  },
+  "regular_plural_subject_verb_agreement_1": {
+    "total": 200,
+    "correct": 118,
+    "accuracy": 0.59,
+    "avg_margin": 0.16365914821624755
+  },
+  "regular_plural_subject_verb_agreement_2": {
+    "total": 200,
+    "correct": 129,
+    "accuracy": 0.645,
+    "avg_margin": 0.1937646222114563
+  },
+  "sentential_negation_npi_licensor_present": {
+    "total": 200,
+    "correct": 200,
+    "accuracy": 1.0,
+    "avg_margin": 0.7114581990242005
+  },
+  "sentential_negation_npi_scope": {
+    "total": 200,
+    "correct": 57,
+    "accuracy": 0.285,
+    "avg_margin": -0.05772735595703125
+  },
+  "sentential_subject_island": {
+    "total": 200,
+    "correct": 114,
+    "accuracy": 0.57,
+    "avg_margin": 0.036808323860168454
+  },
+  "superlative_quantifiers_1": {
+    "total": 200,
+    "correct": 118,
+    "accuracy": 0.59,
+    "avg_margin": 0.08564848423004151
+  },
+  "superlative_quantifiers_2": {
+    "total": 200,
+    "correct": 115,
+    "accuracy": 0.575,
+    "avg_margin": 0.13166699409484864
+  },
+  "tough_vs_raising_1": {
+    "total": 200,
+    "correct": 73,
+    "accuracy": 0.365,
+    "avg_margin": -0.17446390628814698
+  },
+  "tough_vs_raising_2": {
+    "total": 200,
+    "correct": 150,
+    "accuracy": 0.75,
+    "avg_margin": 0.2172014331817627
+  },
+  "transitive": {
+    "total": 200,
+    "correct": 128,
+    "accuracy": 0.64,
+    "avg_margin": 0.21860329627990724
+  },
+  "wh_island": {
+    "total": 200,
+    "correct": 152,
+    "accuracy": 0.76,
+    "avg_margin": 0.09450546741485595
+  },
+  "wh_questions_object_gap": {
+    "total": 200,
+    "correct": 159,
+    "accuracy": 0.795,
+    "avg_margin": 0.1967719841003418
+  },
+  "wh_questions_subject_gap": {
+    "total": 200,
+    "correct": 191,
+    "accuracy": 0.955,
+    "avg_margin": 0.3462546443939209
+  },
+  "wh_questions_subject_gap_long_distance": {
+    "total": 200,
+    "correct": 197,
+    "accuracy": 0.985,
+    "avg_margin": 0.2796981024742127
+  },
+  "wh_vs_that_no_gap": {
+    "total": 200,
+    "correct": 198,
+    "accuracy": 0.99,
+    "avg_margin": 0.40296948432922364
+  },
+  "wh_vs_that_no_gap_long_distance": {
+    "total": 200,
+    "correct": 198,
+    "accuracy": 0.99,
+    "avg_margin": 0.30585015058517456
+  },
+  "wh_vs_that_with_gap": {
+    "total": 200,
+    "correct": 9,
+    "accuracy": 0.045,
+    "avg_margin": -0.430087103843689
+  },
+  "wh_vs_that_with_gap_long_distance": {
+    "total": 200,
+    "correct": 8,
+    "accuracy": 0.04,
+    "avg_margin": -0.28994911909103394
+  },
+  "overall": {
+    "total": 13400,
+    "correct": 7740,
+    "accuracy": 0.5776119402985075
+  }
+}

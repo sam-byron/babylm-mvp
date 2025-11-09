@@ -1,0 +1,14 @@
+python3 train_strict.py \
+  --train ./data_root/strict/train_span.txt \
+  --spm ./spm32k_unigram.model \
+  --out ./ckpts/strict \
+  --lr 3e-4 \
+   --auto_buckets \
+  --bucket_sample 100000 \
+  --bucket_quantiles 50 75 90 95 \
+  --bucket_multiple 64 \
+  --bucket_max_k 5 \
+  --min_bucket 256 \
+  --workers 2 \
+  --prefetch_lines -1 --token_budget 16384 --tf32 --bf16 --sdp flash --fused_adam --foreach_optim \
+  --persistent_workers --prefetch_factor 6 --log_every 50 --debug_attn --debug_attn_every 250 

@@ -86,7 +86,7 @@ class MultiQueryAttention(nn.Module):
 
         self.rope = RotaryEmbedding(self.head_dim)
 
-    def forward(self, x, attn_mask: Optional[torch.Tensor] = None, past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
+    def forward(self, x, attn_mask: Optional[torch.Tensor] = None, past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, return_attn=False):
         B, T, C = x.shape
         q = self.wq(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)  # [B,H,T,D]
         k = self.wk(x).view(B, T, self.kv_heads, self.head_dim).transpose(1, 2)  # [B,KV,T,D]
@@ -115,11 +115,14 @@ class MultiQueryAttention(nn.Module):
         # causal mask
         if attn_mask is not None:
             att = att + attn_mask  # mask should be additive (-inf on masked positions)
+        weights = torch.softmax(att, dim=-1)
         att = F.softmax(att, dim=-1)
         att = self.dropout(att)
         y = torch.matmul(att, v)  # [B,H,T,D]
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.head_dim)
         y = self.wo(y)
+        if return_attn:
+            return y, weights  # return attention map for debugging
         return y, (k, v)
 
 
@@ -193,6 +196,8 @@ class UTransformerLM(nn.Module):
             # shape [B,1,1,T] → broadcast across heads and query positions
             key_pad = (idx == pad_id).unsqueeze(1).unsqueeze(2)
             attn_mask = attn_mask + key_pad * (-1e4)  # fp16-safe large negative
+        # (attention debug handled in training loop)
+
         new_kv = []
         kv = [None] * len(self.layers)
         for i, layer in enumerate(self.layers):
