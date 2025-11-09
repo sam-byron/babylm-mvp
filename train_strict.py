@@ -62,6 +62,119 @@ class LineDataset(IterableDataset):
             yield torch.tensor(ids, dtype=torch.long), words
 
 
+class PackedSequenceDataset(IterableDataset):
+    """Pack multiple sentences into fixed-length sequences with segment IDs.
+
+    Yields tuples (x, seg, words) where:
+      - x: LongTensor [T] token ids padded to seq_len
+      - seg: LongTensor [T] segment ids (0 for pad, 1..S for each sentence)
+      - words: total whitespace-separated word count packed into this sequence
+    """
+
+    def __init__(self, text_path: str, sp_model: str, seq_len: int, pad_id: int, add_bos: bool = True, add_eos: bool = True, prefetch_lines: int = 0):
+        super().__init__()
+        self.text_path = text_path
+        self.sp = spm.SentencePieceProcessor(model_file=sp_model)
+        self.add_bos = add_bos
+        self.add_eos = add_eos
+        self.bos = self.sp.bos_id() if add_bos and self.sp.bos_id() >= 0 else None
+        self.eos = self.sp.eos_id() if add_eos and self.sp.eos_id() >= 0 else None
+        self.seq_len = int(seq_len)
+        self.pad_id = int(pad_id)
+        self.prefetch_lines = prefetch_lines
+        self._buffer = None
+        if prefetch_lines != 0:
+            self._buffer = []
+            count = 0
+            with open(self.text_path, "r", encoding="utf-8") as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    self._buffer.append(line)
+                    count += 1
+                    if 0 < self.prefetch_lines <= count:
+                        break
+
+    def __iter__(self):
+        if self._buffer is not None:
+            source_iter = iter(self._buffer)
+        else:
+            source_iter = (r.strip() for r in open(self.text_path, "r", encoding="utf-8"))
+
+        cur_ids = []  # type: list[int]
+        cur_seg = []  # type: list[int]
+        seg_id = 1
+        words_accum = 0
+
+        def _flush():
+            nonlocal cur_ids, cur_seg, seg_id, words_accum
+            if not cur_ids:
+                return None
+            # pad to seq_len
+            pad_needed = self.seq_len - len(cur_ids)
+            if pad_needed > 0:
+                cur_ids = cur_ids + [self.pad_id] * pad_needed
+                cur_seg = cur_seg + [0] * pad_needed
+            x = torch.tensor(cur_ids[: self.seq_len], dtype=torch.long)
+            s = torch.tensor(cur_seg[: self.seq_len], dtype=torch.long)
+            w = words_accum
+            # reset
+            cur_ids = []
+            cur_seg = []
+            seg_id = 1
+            words_accum = 0
+            return x, s, w
+
+        for line in source_iter:
+            if not line:
+                continue
+            ids = self.sp.encode(line, out_type=int)
+            if self.bos is not None:
+                ids = [self.bos] + ids
+            if self.eos is not None:
+                ids = ids + [self.eos]
+            L = len(ids)
+            # If sentence longer than seq_len, emit it truncated in its own sequence
+            if L > self.seq_len:
+                # If there's content pending, flush first
+                out = _flush()
+                if out is not None:
+                    yield out
+                trunc = ids[: self.seq_len]
+                seg = [1] * self.seq_len
+                x = torch.tensor(trunc, dtype=torch.long)
+                s = torch.tensor(seg, dtype=torch.long)
+                # count words for this long line
+                w = len(line.split())
+                yield x, s, w
+                continue
+
+            # If it doesn't fit, flush current and start new sequence
+            remain = self.seq_len - len(cur_ids)
+            if L > remain and len(cur_ids) > 0:
+                out = _flush()
+                if out is not None:
+                    yield out
+                remain = self.seq_len
+
+            # Now it fits in the current (possibly fresh) buffer
+            cur_ids.extend(ids)
+            cur_seg.extend([seg_id] * L)
+            seg_id += 1
+            words_accum += len(line.split())
+
+            if len(cur_ids) == self.seq_len:
+                out = _flush()
+                if out is not None:
+                    yield out
+
+        # Flush tail
+        out = _flush()
+        if out is not None:
+            yield out
+
+
 class TokenBudgetBatcher(IterableDataset):
     """
     Wraps a (sequence, words) IterableDataset and emits pre-padded batches that
@@ -190,6 +303,16 @@ def collate_lines(batch, pad_id: int):
     words = sum(b[1] for b in batch)
     x = nn.utils.rnn.pad_sequence(seqs, batch_first=True, padding_value=pad_id)
     return x, words
+
+
+def collate_packed(batch):
+    # batch: list of (x[T], seg[T], words)
+    xs = [b[0] for b in batch]
+    segs = [b[1] for b in batch]
+    words = sum(int(b[2]) for b in batch)
+    x = torch.stack(xs, dim=0)
+    s = torch.stack(segs, dim=0)
+    return x, s, words
 
 
 def _debug_attn(model: Any, batch: torch.Tensor, pad_id: int, step: int):
@@ -340,39 +463,68 @@ def train(args):
     # GradScaler only needed for FP16, not BF16
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp and amp_dtype == torch.float16)
 
-    # Optionally auto-derive buckets from data sample
-    if args.auto_buckets:
-        sample_lens = _sample_lengths(args.train, sp, add_bos=True, add_eos=True, max_len_cap=max(args.buckets), sample=args.bucket_sample)
-        suggested = _suggest_buckets(sample_lens, token_budget=args.token_budget, min_bucket=args.min_bucket, max_bucket=max(args.buckets),
-                                     quantiles=tuple(args.bucket_quantiles), multiple=args.bucket_multiple, max_k=args.bucket_max_k)
-        buckets = suggested
-        print(f"[buckets] auto-derived {buckets} from {len(sample_lens)} samples")
+    # Build dataset/dataloader based on mode
+    if getattr(args, "pack_segments", False):
+        # Segment-packed mode: fixed-length sequences with segment IDs
+        seq_len = int(args.pack_seq_len)
+        ds_packed = PackedSequenceDataset(args.train, args.spm, seq_len=seq_len, pad_id=pad_id, add_bos=True, add_eos=True, prefetch_lines=args.prefetch_lines)
+        batch_cap = max(1, int(args.token_budget) // seq_len)
+        if args.workers > 0:
+            dl = DataLoader(
+                ds_packed,
+                batch_size=batch_cap,
+                num_workers=int(args.workers),
+                pin_memory=(device == "cuda"),
+                persistent_workers=bool(args.persistent_workers),
+                prefetch_factor=int(args.prefetch_factor),
+                shuffle=False,
+                drop_last=False,
+                collate_fn=collate_packed,
+            )
+        else:
+            dl = DataLoader(
+                ds_packed,
+                batch_size=batch_cap,
+                num_workers=0,
+                pin_memory=(device == "cuda"),
+                shuffle=False,
+                drop_last=False,
+                collate_fn=collate_packed,
+            )
     else:
-        buckets = [b for b in args.buckets if b >= args.min_bucket]
-        buckets = sorted(buckets, reverse=bool(args.bucket_desc))
-    ds_lines = LineDataset(args.train, args.spm, add_bos=True, add_eos=True, max_len=max(buckets), prefetch_lines=args.prefetch_lines)
-    ds = TokenBudgetBatcher(ds_lines, pad_id=pad_id, buckets=buckets, token_budget=args.token_budget)
-    # DataLoader just yields already batched tensors; set batch_size=None to avoid extra batching
-    if args.workers > 0:
-        dl = DataLoader(
-            ds,
-            batch_size=None,
-            num_workers=int(args.workers),
-            pin_memory=(device == "cuda"),
-            persistent_workers=bool(args.persistent_workers),
-            prefetch_factor=int(args.prefetch_factor),
-            shuffle=False,
-            drop_last=False,
-        )
-    else:
-        dl = DataLoader(
-            ds,
-            batch_size=None,
-            num_workers=0,
-            pin_memory=(device == "cuda"),
-            shuffle=False,
-            drop_last=False,
-        )
+        # Token budget bucketing mode
+        if args.auto_buckets:
+            sample_lens = _sample_lengths(args.train, sp, add_bos=True, add_eos=True, max_len_cap=max(args.buckets), sample=args.bucket_sample)
+            suggested = _suggest_buckets(sample_lens, token_budget=args.token_budget, min_bucket=args.min_bucket, max_bucket=max(args.buckets),
+                                         quantiles=tuple(args.bucket_quantiles), multiple=args.bucket_multiple, max_k=args.bucket_max_k)
+            buckets = suggested
+            print(f"[buckets] auto-derived {buckets} from {len(sample_lens)} samples")
+        else:
+            buckets = [b for b in args.buckets if b >= args.min_bucket]
+            buckets = sorted(buckets, reverse=bool(args.bucket_desc))
+        ds_lines = LineDataset(args.train, args.spm, add_bos=True, add_eos=True, max_len=max(buckets), prefetch_lines=args.prefetch_lines)
+        ds = TokenBudgetBatcher(ds_lines, pad_id=pad_id, buckets=buckets, token_budget=args.token_budget)
+        # DataLoader just yields already batched tensors; set batch_size=None to avoid extra batching
+        if args.workers > 0:
+            dl = DataLoader(
+                ds,
+                batch_size=None,
+                num_workers=int(args.workers),
+                pin_memory=(device == "cuda"),
+                persistent_workers=bool(args.persistent_workers),
+                prefetch_factor=int(args.prefetch_factor),
+                shuffle=False,
+                drop_last=False,
+            )
+        else:
+            dl = DataLoader(
+                ds,
+                batch_size=None,
+                num_workers=0,
+                pin_memory=(device == "cuda"),
+                shuffle=False,
+                drop_last=False,
+            )
 
     milestones = []
     milestones += [int(1e6 * i) for i in range(1, 11)]
@@ -420,8 +572,15 @@ def train(args):
     if start_step > 0:
         step = start_step
 
-    for batch, words in dl:
+    for entry in dl:
+        if getattr(args, "pack_segments", False):
+            batch, seg_ids, words = entry
+        else:
+            batch, words = entry
+            seg_ids = None
         batch = batch.to(device, non_blocking=(device == "cuda"))
+        if seg_ids is not None:
+            seg_ids = seg_ids.to(device, non_blocking=(device == "cuda"))
         targets = batch.clone()
         targets[targets == pad_id] = -100  # ignore pad positions
         # invariant: batch.numel() == batch.size(0)*batch.size(1) ~= token_budget (within bucket rounding)
@@ -434,7 +593,7 @@ def train(args):
                 setattr(model, "_debug_step_int", int(step))
             except Exception:
                 pass
-            _, loss = model(batch, targets=targets)
+            _, loss = model(batch, targets=targets, segment_ids=seg_ids)
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)  # if using AMP
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -533,6 +692,9 @@ def parse_args():
     ap.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path or 'latest'")
     ap.add_argument("--debug_attn", action="store_true", help="Enable periodic attention debug print (layer 0 pad mass)")
     ap.add_argument("--debug_attn_every", type=int, default=250, help="Steps between attention debug prints")
+    # Segment-packed mode
+    ap.add_argument("--pack_segments", action="store_true", help="Enable segment-packed training (pack multiple sentences into one sequence)")
+    ap.add_argument("--pack_seq_len", type=int, default=2048, help="Sequence length for segment-packed mode")
     return ap.parse_args()
 
 

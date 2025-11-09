@@ -183,7 +183,7 @@ class UTransformerLM(nn.Module):
         mask = torch.tril(torch.ones(cfg.max_seq_len, cfg.max_seq_len)).unsqueeze(0).unsqueeze(0)
         self.register_buffer("causal_mask", (1.0 - mask) * -1e4)
 
-    def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None):
+    def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, segment_ids: Optional[torch.Tensor] = None):
         # idx: [B,T]
         B, T = idx.size()
         if T > self.cfg.max_seq_len:
@@ -196,6 +196,14 @@ class UTransformerLM(nn.Module):
             # shape [B,1,1,T] → broadcast across heads and query positions
             key_pad = (idx == pad_id).unsqueeze(1).unsqueeze(2)
             attn_mask = attn_mask + key_pad * (-1e4)  # fp16-safe large negative
+        # Block attention across segments if provided (segment_ids: [B,T])
+        if segment_ids is not None:
+            # allow attention only within same segment id
+            # seg_eq: [B,1,T,T] True when in same segment; False when crossing segments
+            seg = segment_ids[:, :T]
+            seg_eq = (seg.unsqueeze(1).unsqueeze(3) == seg.unsqueeze(1).unsqueeze(2))
+            seg_mask = (~seg_eq).to(attn_mask.dtype) * (-1e4)
+            attn_mask = attn_mask + seg_mask
         # (attention debug handled in training loop)
 
         new_kv = []
