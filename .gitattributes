@@ -1,0 +1,2 @@
+data_root/strict/train.txt filter=lfs diff=lfs merge=lfs -text
+data_root/strict/train_span.txt filter=lfs diff=lfs merge=lfs -text
