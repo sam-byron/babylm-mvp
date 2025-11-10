@@ -105,6 +105,11 @@ def evaluate_subset(model, sp, file_path, max_len, device, logger, progress=True
         margins.append(nll_bad - nll_good)
 
     acc = (correct / total) if total > 0 else 0.0
+    acc = (correct / total) if total > 0 else 0.0
+    # acc_reversed = (total - correct) / total if total > 0 else 0.0
+    # if acc_reversed - acc > 0.20:
+    #     logger.warning(f"[{os.path.basename(file_path)}] labels likely inverted: acc={acc:.3f} reversed={acc_reversed:.3f}")
+
     avg_margin = (sum(margins) / len(margins)) if margins else 0.0
     return {"total": total, "correct": correct, "accuracy": acc, "avg_margin": avg_margin}
 

@@ -1,5 +1,5 @@
 python3 train_strict.py \
-  --train ./data_root/strict/train_span.txt \
+  --train ./data_root/strict/bnc_sentences_span.txt \
   --spm ./spm32k_unigram.model \
   --out ./ckpts/strict \
   --lr 3e-4 \
@@ -11,4 +11,8 @@ python3 train_strict.py \
   --min_bucket 256 \
   --workers 2 \
   --prefetch_lines -1 --token_budget 16384 --tf32 --bf16 --sdp flash --fused_adam --foreach_optim \
-  --persistent_workers --prefetch_factor 6 --log_every 50 --debug_attn --debug_attn_every 250 
+  --persistent_workers --prefetch_factor 6 --log_every 50 --debug_attn --debug_attn_every 250 --pack_segments --pack_seq_len 1024 \
+  --packed_batch_encode 512 \
+  --packed_async_read \
+  --packed_queue_size 256 \
+  --packed_use_mmap

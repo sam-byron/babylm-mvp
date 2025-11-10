@@ -86,6 +86,27 @@ class MultiQueryAttention(nn.Module):
 
         self.rope = RotaryEmbedding(self.head_dim)
 
+    @staticmethod
+    def masked_softmax(scores: torch.Tensor, mask_bool: torch.Tensor) -> torch.Tensor:
+        """Numerically safe masked softmax.
+
+        Args:
+            scores: [B,H,T,T]
+            mask_bool: same shape or broadcastable, True where positions are disallowed (masked)
+        Returns:
+            Attention weights with masked positions = 0 and each row summing to 1 (unless fully masked -> uniform zeros)
+        """
+        # Fill masked with large negative then clamp for fp16/bf16 safety
+        scores = scores.masked_fill(mask_bool, -1e4).clamp(min=-50, max=50)
+        # Stable exp via max subtraction
+        m = scores.max(dim=-1, keepdim=True).values
+        exp = torch.exp(scores - m)
+        # Zero out masked columns exactly (ensures no residual tiny values)
+        exp = exp.masked_fill(mask_bool, 0.0)
+        # Denominator protected against 0
+        denom = exp.sum(dim=-1, keepdim=True).clamp_min(1e-9)
+        return exp / denom
+
     def forward(self, x, attn_mask: Optional[torch.Tensor] = None, past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, return_attn=False):
         B, T, C = x.shape
         q = self.wq(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)  # [B,H,T,D]
@@ -111,13 +132,28 @@ class MultiQueryAttention(nn.Module):
             k = k.repeat_interleave(repeat, dim=1)
             v = v.repeat_interleave(repeat, dim=1)
 
-        att = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        # causal mask
+        # Compute raw attention scores
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)  # [B,H,T,T]
+        # Head-agnostic probe (counts query positions whose entire key set is masked).
+        # Gated & rate-limited by flags set externally (e.g., trainer).
+        if attn_mask is not None and getattr(self, "_debug_mask_rows", False):
+            step = getattr(self, "_debug_step_int", None)
+            every = int(getattr(self, "_debug_mask_rows_every", 500))
+            if (step is None) or (step % max(1, every) == 0):
+                allowed = (attn_mask >= 0)  # [B,1,T,T]
+                bad_rows = (~allowed.any(dim=-1)).sum()  # number of query rows fully masked
+                total_rows = allowed.size(-2) * allowed.size(0)  # B * T
+                if bad_rows.item() > 0:
+                    pct = bad_rows.item() / max(1, total_rows)
+                    layer_id = getattr(self, "_layer_idx", "?")
+                    print(f"[attn-debug] step={step} layer={layer_id} fully_masked_queries={bad_rows.item()} total_queries={total_rows} pct={pct:.2%}")
         if attn_mask is not None:
-            att = att + attn_mask  # mask should be additive (-inf on masked positions)
-        weights = torch.softmax(att, dim=-1)
-        att = F.softmax(att, dim=-1)
-        att = self.dropout(att)
+            # Build boolean mask: True where disallowed
+            mask_bool = (attn_mask < 0).to(torch.bool).expand_as(scores)
+            weights = self.masked_softmax(scores, mask_bool)
+        else:
+            weights = torch.softmax(scores.clamp(min=-50, max=50), dim=-1)
+        att = self.dropout(weights)
         y = torch.matmul(att, v)  # [B,H,T,D]
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.head_dim)
         y = self.wo(y)
@@ -162,6 +198,10 @@ class UTransformerLM(nn.Module):
     def __init__(self, cfg: UTransformerConfig):
         super().__init__()
         self.cfg = cfg
+        # optional runtime debug flags (can be toggled by trainer)
+        self._debug_mask_rows = False
+        self._debug_mask_rows_every = 500
+        self._debug_step_int = 0
         # If we use an external PAD id at vocab_size, extend embedding/output by 1
         emb_vocab = cfg.vocab_size + (1 if cfg.pad_id == cfg.vocab_size else 0)
         self.tok_emb = nn.Embedding(
@@ -209,6 +249,15 @@ class UTransformerLM(nn.Module):
         new_kv = []
         kv = [None] * len(self.layers)
         for i, layer in enumerate(self.layers):
+            # propagate debug flags and layer idx to attention module if present
+            if hasattr(layer, "attn"):
+                try:
+                    layer.attn._debug_mask_rows = bool(getattr(self, "_debug_mask_rows", False))
+                    layer.attn._debug_mask_rows_every = int(getattr(self, "_debug_mask_rows_every", 500))
+                    layer.attn._debug_step_int = int(getattr(self, "_debug_step_int", 0))
+                    layer.attn._layer_idx = i
+                except Exception:
+                    pass
             x, kv_i = layer(x, attn_mask=attn_mask, past_kv=kv[i])
             new_kv.append(kv_i)
         x = self.norm_f(x)

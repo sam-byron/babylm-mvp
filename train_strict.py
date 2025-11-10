@@ -6,9 +6,14 @@ import torch
 import time
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import IterableDataset, DataLoader
 import sentencepiece as spm
 from typing import Any, Optional
+import threading
+import queue as queue_mod
+import mmap
+import math
 
 from models.u_transformer import UTransformerConfig, UTransformerLM
 from utils.accounting import ExposureAccounting
@@ -71,7 +76,8 @@ class PackedSequenceDataset(IterableDataset):
       - words: total whitespace-separated word count packed into this sequence
     """
 
-    def __init__(self, text_path: str, sp_model: str, seq_len: int, pad_id: int, add_bos: bool = True, add_eos: bool = True, prefetch_lines: int = 0):
+    def __init__(self, text_path: str, sp_model: str, seq_len: int, pad_id: int, add_bos: bool = True, add_eos: bool = True, prefetch_lines: int = 0,
+                 batch_encode: int = 0, async_read: bool = False, queue_size: int = 128, use_mmap: bool = False):
         super().__init__()
         self.text_path = text_path
         self.sp = spm.SentencePieceProcessor(model_file=sp_model)
@@ -83,6 +89,10 @@ class PackedSequenceDataset(IterableDataset):
         self.pad_id = int(pad_id)
         self.prefetch_lines = prefetch_lines
         self._buffer = None
+        self.batch_encode = int(batch_encode)
+        self.async_read = bool(async_read)
+        self.queue_size = int(queue_size)
+        self.use_mmap = bool(use_mmap)
         if prefetch_lines != 0:
             self._buffer = []
             count = 0
@@ -100,7 +110,16 @@ class PackedSequenceDataset(IterableDataset):
         if self._buffer is not None:
             source_iter = iter(self._buffer)
         else:
-            source_iter = (r.strip() for r in open(self.text_path, "r", encoding="utf-8"))
+            if self.use_mmap:
+                # memory-map file and iterate lines
+                def _mmap_lines(path):
+                    with open(path, "r+b") as f:
+                        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                            for line in iter(mm.readline, b""):
+                                yield line.decode("utf-8", errors="ignore").strip()
+                source_iter = _mmap_lines(self.text_path)
+            else:
+                source_iter = (r.strip() for r in open(self.text_path, "r", encoding="utf-8"))
 
         cur_ids = []  # type: list[int]
         cur_seg = []  # type: list[int]
@@ -126,47 +145,104 @@ class PackedSequenceDataset(IterableDataset):
             words_accum = 0
             return x, s, w
 
-        for line in source_iter:
-            if not line:
-                continue
-            ids = self.sp.encode(line, out_type=int)
-            if self.bos is not None:
-                ids = [self.bos] + ids
-            if self.eos is not None:
-                ids = ids + [self.eos]
-            L = len(ids)
-            # If sentence longer than seq_len, emit it truncated in its own sequence
-            if L > self.seq_len:
-                # If there's content pending, flush first
-                out = _flush()
-                if out is not None:
+        def _consumer(lines_batch):
+            nonlocal cur_ids, cur_seg, seg_id, words_accum
+            if not lines_batch:
+                return
+            # batch encode to reduce Python overhead
+            ids_list = self.sp.encode(lines_batch, out_type=int)
+            for line, ids in zip(lines_batch, ids_list):
+                if self.bos is not None:
+                    ids = [self.bos] + ids
+                if self.eos is not None:
+                    ids = ids + [self.eos]
+                L = len(ids)
+                words_line = len(line.split())
+                if L > self.seq_len:
+                    # Flush current buffer so long sentence chunks become standalone sequences
+                    out = _flush()
+                    if out is not None:
+                        yield out
+                    start = 0
+                    # Emit full chunks of size seq_len
+                    while (L - start) >= self.seq_len:
+                        chunk = ids[start:start + self.seq_len]
+                        seg = [seg_id] * self.seq_len  # use current seg_id (bug fix)
+                        x = torch.tensor(chunk, dtype=torch.long)
+                        s = torch.tensor(seg, dtype=torch.long)
+                        # If no remainder after this chunk, count words here; otherwise count on tail flush
+                        w = words_line if (L - (start + self.seq_len) == 0) else 0
+                        yield x, s, w
+                        seg_id += 1  # increment seg_id for long-sentence path (bug fix)
+                        start += self.seq_len
+                    # Place tail into current buffer (design fix)
+                    tail = ids[start:]
+                    if tail:
+                        cur_ids.extend(tail)
+                        cur_seg.extend([seg_id] * len(tail))
+                        seg_id += 1
+                        # Count words when tail exists; it will be included on next flush
+                        words_accum += words_line
+                    continue
+                remain = self.seq_len - len(cur_ids)
+                if L > remain and len(cur_ids) > 0:
+                    out = _flush()
+                    if out is not None:
+                        yield out
+                cur_ids.extend(ids)
+                cur_seg.extend([seg_id] * L)
+                seg_id += 1
+                words_accum += words_line
+                if len(cur_ids) == self.seq_len:
+                    out = _flush()
+                    if out is not None:
+                        yield out
+
+        # Producer-consumer or simple loop depending on settings
+        if self.batch_encode and not self.async_read:
+            batch = []
+            for line in source_iter:
+                if not line:
+                    continue
+                batch.append(line)
+                if len(batch) >= self.batch_encode:
+                    for out in _consumer(batch):
+                        yield out
+                    batch = []
+            if batch:
+                for out in _consumer(batch):
                     yield out
-                trunc = ids[: self.seq_len]
-                seg = [1] * self.seq_len
-                x = torch.tensor(trunc, dtype=torch.long)
-                s = torch.tensor(seg, dtype=torch.long)
-                # count words for this long line
-                w = len(line.split())
-                yield x, s, w
-                continue
+        elif self.async_read and self.batch_encode:
+            q = queue_mod.Queue(maxsize=self.queue_size)
+            stop_token = object()
 
-            # If it doesn't fit, flush current and start new sequence
-            remain = self.seq_len - len(cur_ids)
-            if L > remain and len(cur_ids) > 0:
-                out = _flush()
-                if out is not None:
+            def _producer():
+                batch = []
+                for line in source_iter:
+                    if not line:
+                        continue
+                    batch.append(line)
+                    if len(batch) >= self.batch_encode:
+                        q.put(batch)
+                        batch = []
+                if batch:
+                    q.put(batch)
+                q.put(stop_token)
+
+            t = threading.Thread(target=_producer, daemon=True)
+            t.start()
+            while True:
+                item = q.get()
+                if item is stop_token:
+                    break
+                for out in _consumer(item):
                     yield out
-                remain = self.seq_len
-
-            # Now it fits in the current (possibly fresh) buffer
-            cur_ids.extend(ids)
-            cur_seg.extend([seg_id] * L)
-            seg_id += 1
-            words_accum += len(line.split())
-
-            if len(cur_ids) == self.seq_len:
-                out = _flush()
-                if out is not None:
+        else:
+            # Fallback: single-line encode
+            for line in source_iter:
+                if not line:
+                    continue
+                for out in _consumer([line]):
                     yield out
 
         # Flush tail
@@ -424,15 +500,29 @@ def train(args):
     else:
         pad_id = vocab_size       # put PAD just past the last vocab id
 
+    max_seq_len = int(args.pack_seq_len) if getattr(args, "pack_segments", False) else max(args.buckets)
+    # cfg = UTransformerConfig(
+    #     vocab_size=vocab_size,
+    #     d_model=1024,
+    #     n_layers=24,
+    #     n_heads=16,
+    #     kv_heads=1,
+    #     mlp_mult=4.0,
+    #     dropout=0.1,
+    #     max_seq_len=max_seq_len,
+    #     bos_id=sp.bos_id() if sp.bos_id() >= 0 else 1,
+    #     eos_id=sp.eos_id() if sp.eos_id() >= 0 else 2,
+    #     pad_id=pad_id,
+    # )
     cfg = UTransformerConfig(
         vocab_size=vocab_size,
-        d_model=1024,
-        n_layers=24,
-        n_heads=16,
+        d_model=384,
+        n_layers=8,
+        n_heads=8,
         kv_heads=1,
         mlp_mult=4.0,
         dropout=0.1,
-        max_seq_len=max(args.buckets),
+        max_seq_len=max_seq_len,
         bos_id=sp.bos_id() if sp.bos_id() >= 0 else 1,
         eos_id=sp.eos_id() if sp.eos_id() >= 0 else 2,
         pad_id=pad_id,
@@ -457,17 +547,56 @@ def train(args):
         foreach=foreach_opt,
     )
 
-    # AMP / BF16 selection
+    def cosine_with_warmup(step, warmup: int, total: int):
+        if step < warmup:
+            return float(step) / float(max(1, warmup))
+        progress = float(step - warmup) / float(max(1, total - warmup))
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    warmup_steps = int(getattr(args, "warmup_steps", 4000))
+    max_steps = int(getattr(args, "max_steps", 200000))
+    scheduler = LambdaLR(optimizer, lr_lambda=lambda s: cosine_with_warmup(s, warmup=warmup_steps, total=max_steps))
+
+    # AMP dtype selection (auto bf16/fp16 based on GPU capability)
     use_amp = (device == "cuda") and (not args.no_amp)
-    amp_dtype = torch.bfloat16 if (args.bf16 and device == "cuda") else torch.float16
-    # GradScaler only needed for FP16, not BF16
+    def _supports_bf16():
+        ok = False
+        try:
+            if hasattr(torch.cuda, "is_bf16_supported"):
+                ok = bool(torch.cuda.is_bf16_supported())
+            else:
+                major, minor = torch.cuda.get_device_capability() if torch.cuda.is_available() else (0, 0)
+                ok = major >= 8  # Ampere+
+        except Exception:
+            ok = False
+        return ok
+    # Back-compat: explicit --bf16 overrides
+    if getattr(args, "bf16", False) and device == "cuda":
+        amp_dtype = torch.bfloat16
+    else:
+        # new switch
+        amp_choice = getattr(args, "amp_dtype", "auto")
+        if amp_choice == "bf16":
+            amp_dtype = torch.bfloat16
+        elif amp_choice == "fp16":
+            amp_dtype = torch.float16
+        else:
+            amp_dtype = torch.bfloat16 if _supports_bf16() else torch.float16
+    # GradScaler only for FP16
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp and amp_dtype == torch.float16)
 
     # Build dataset/dataloader based on mode
     if getattr(args, "pack_segments", False):
         # Segment-packed mode: fixed-length sequences with segment IDs
         seq_len = int(args.pack_seq_len)
-        ds_packed = PackedSequenceDataset(args.train, args.spm, seq_len=seq_len, pad_id=pad_id, add_bos=True, add_eos=True, prefetch_lines=args.prefetch_lines)
+        ds_packed = PackedSequenceDataset(
+            args.train, args.spm, seq_len=seq_len, pad_id=pad_id,
+            add_bos=True, add_eos=True, prefetch_lines=args.prefetch_lines,
+            batch_encode=int(getattr(args, "packed_batch_encode", 0)),
+            async_read=bool(getattr(args, "packed_async_read", False)),
+            queue_size=int(getattr(args, "packed_queue_size", 128)),
+            use_mmap=bool(getattr(args, "packed_use_mmap", False)),
+        )
         batch_cap = max(1, int(args.token_budget) // seq_len)
         if args.workers > 0:
             dl = DataLoader(
@@ -527,8 +656,8 @@ def train(args):
             )
 
     milestones = []
-    milestones += [int(1e6 * i) for i in range(1, 11)]
-    milestones += [int(1e7 * i) for i in range(2, 11)]
+    milestones += [int(1e6 * i) for i in range(1, 11)]  # 1M, 2M, ..., 10M
+    milestones += [int(1e7 * i) for i in range(2, 101)]  # 20M, 30M, ..., 1B
     accounting = ExposureAccounting(milestones=milestones, max_words_seen=int(args.max_words), save_dir=args.out)
 
     model.train()
@@ -550,8 +679,26 @@ def train(args):
         if ckpt_path:
             print(f"[resume] loading {ckpt_path}")
             ckpt = torch.load(ckpt_path, map_location=device)
-            # Rebuild model if vocab/config differs? Assume same.
-            model.load_state_dict(ckpt["model"], strict=True)
+            # Rebuild model if vocab/config differs? Assume same for parameters,
+            # but safely drop buffers/params whose shapes don't match (e.g., causal_mask).
+            state = ckpt.get("model", ckpt)
+            drop_keys = []
+            current = model.state_dict()
+            for k, v in list(state.items()):
+                if k in current and hasattr(v, "shape") and hasattr(current[k], "shape"):
+                    if v.shape != current[k].shape:
+                        drop_keys.append(k)
+            for k in drop_keys:
+                try:
+                    print(f"[resume] dropping shape-mismatched key: {k} ckpt={tuple(state[k].shape)} current={tuple(current[k].shape)}")
+                except Exception:
+                    print(f"[resume] dropping shape-mismatched key: {k}")
+                del state[k]
+            missing, unexpected = model.load_state_dict(state, strict=False)
+            if missing:
+                print(f"[resume] missing keys after load (expected if shapes changed): {missing}")
+            if unexpected:
+                print(f"[resume] unexpected keys after load: {unexpected}")
             try:
                 optimizer.load_state_dict(ckpt["optimizer"])
             except Exception as e:
@@ -589,15 +736,51 @@ def train(args):
         with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype):
             # _, loss = model(batch, targets=targets)
             # attach scalar step only if safe; ignore static analyzer complaints
+            # Propagate debug step to model (and attention modules indirectly)
             try:
                 setattr(model, "_debug_step_int", int(step))
             except Exception:
                 pass
+            # Enable masked row debug if requested
+            if getattr(args, "debug_mask_rows", False):
+                try:
+                    model._debug_mask_rows = True
+                    model._debug_mask_rows_every = int(getattr(args, "debug_mask_rows_every", 500))
+                except Exception:
+                    pass
             _, loss = model(batch, targets=targets, segment_ids=seg_ids)
         scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)  # if using AMP
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer); scaler.update()
+        if use_amp:
+            scaler.unscale_(optimizer)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        if step % 100 == 0:
+            try:
+                lr = scheduler.get_last_lr()[0] if scheduler is not None else optimizer.param_groups[0]["lr"]
+            except Exception:
+                lr = optimizer.param_groups[0]["lr"]
+            print(f"[dbg] step={step} lr={lr:.2e} loss={loss.item():.4f} grad_norm={float(grad_norm):.2f}")
+        # Hard non-finite guard (loss/gradients)
+        try:
+            if not bool(torch.isfinite(loss).all().item() if hasattr(torch.isfinite(loss), 'item') else torch.isfinite(loss).all()):
+                print(f"[fatal] non-finite loss at step={step}: {loss.item()}")
+                for n, p in model.named_parameters():
+                    if p.grad is not None and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any()):
+                        print("bad grad param:", n)
+                        break
+                raise RuntimeError("Non-finite loss")
+        except Exception as _nf_e:
+            # Re-raise to halt training; printed info above should aid debugging
+            raise
+        # AMP overflow detector: capture previous scale then compare after update.
+        prev_scale = scaler.get_scale() if use_amp else None
+        if use_amp:
+            scaler.step(optimizer); scaler.update()
+        else:
+            optimizer.step()
+        if use_amp and prev_scale is not None and scaler.get_scale() < prev_scale:
+            print(f"[dbg] step={step} AMP overflow: scale {prev_scale} -> {scaler.get_scale()}")
+        # Advance LR schedule after optimizer update
+        scheduler.step()
 
         step += 1
         accum += float(loss.item())
@@ -685,16 +868,26 @@ def parse_args():
     ap.add_argument("--tf32", action="store_true", help="Allow TF32 matrix operations for speed on Ampere+")
     ap.add_argument("--sdp", type=str, default="auto", choices=["auto","flash","math","mem"], help="Scaled dot-product attention backend preference")
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--max_words", type=float, default=2e8)
+    ap.add_argument("--warmup_steps", type=int, default=4000, help="Number of warmup steps for LR scheduler")
+    ap.add_argument("--max_steps", type=int, default=200000, help="Total number of steps for cosine LR schedule")
+    ap.add_argument("--max_words", type=float, default=2e50 , help="Maximum number of words to process before stopping")
     ap.add_argument("--log_every", type=int, default=50)
     ap.add_argument("--cpu", action="store_true")
     ap.add_argument("--no_amp", action="store_true")
+    ap.add_argument("--amp_dtype", type=str, default="auto", choices=["auto","bf16","fp16"], help="AMP dtype selection: auto picks bf16 if supported else fp16")
     ap.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path or 'latest'")
     ap.add_argument("--debug_attn", action="store_true", help="Enable periodic attention debug print (layer 0 pad mass)")
     ap.add_argument("--debug_attn_every", type=int, default=250, help="Steps between attention debug prints")
+    # Masked row debug (fully masked attention rows)
+    ap.add_argument("--debug_mask_rows", action="store_true", help="Enable reporting of fully masked attention query rows")
+    ap.add_argument("--debug_mask_rows_every", type=int, default=500, help="Steps between fully masked row reports")
     # Segment-packed mode
     ap.add_argument("--pack_segments", action="store_true", help="Enable segment-packed training (pack multiple sentences into one sequence)")
     ap.add_argument("--pack_seq_len", type=int, default=2048, help="Sequence length for segment-packed mode")
+    ap.add_argument("--packed_batch_encode", type=int, default=256, help="Batch size for fused sentencepiece encoding (0=disabled)")
+    ap.add_argument("--packed_async_read", action="store_true", help="Enable async producer for reading lines in packed mode")
+    ap.add_argument("--packed_queue_size", type=int, default=128, help="Queue size for async reader in packed mode")
+    ap.add_argument("--packed_use_mmap", action="store_true", help="Use mmap to iterate lines for packed mode")
     return ap.parse_args()
 
 

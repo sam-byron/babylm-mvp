@@ -33,13 +33,11 @@ Train a 32k unigram SentencePiece model **only on the BabyLM text**.
 
 ```bash
 python scripts/train_spm.py \
-  --input ./data_root/strict/train.txt \
+  --input ./data_root/strict/bnc_sentences.txt  \
   --vocab_size 32000 \
   --model_prefix spm32k_bpe \
   --model_type bpe \
-  --character_coverage 0.9995 \
-  --user_defined_symbols "[SENT],[PAR],[DOC]" \
-  --pad_id 0
+  --character_coverage 0.9995 
 ```
 
 This creates `spm32k_unigram.model` and `spm32k_unigram.vocab`.
@@ -52,8 +50,8 @@ Span infilling provides partial denoising supervision using sentinel tokens.
 
 ```bash
 python scripts/format_span_infill.py \
-  --input ./data_root/strict/train.txt \
-  --output ./data_root/strict/train_span.txt \
+  --input ./data_root/strict/bnc_sentences.txt \
+  --output ./data_root/strict/bnc_sentences_span.txt \
   --mask_ratio 0.15
 ```
 
