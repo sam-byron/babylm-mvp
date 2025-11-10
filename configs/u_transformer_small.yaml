@@ -1,0 +1,39 @@
+model:
+  type: decoder_only
+  d_model: 1024
+  n_layers: 12
+  n_heads: 8
+  ffn_mult: 4.0
+  activation: swiglu
+  rotary: true           # RoPE
+  attn: gqa              # multi-query/GQA for efficiency
+  norm: rms
+  pre_ln: true
+  vocab_path: ./spm32k_unigram.model
+  vocab_size: 16000
+train:
+  seq_buckets: [256, 512, 1024]
+  pack_sequences: true
+  optimizer: adamw
+  adamw:
+    lr: 3.0e-4
+    betas: [0.9, 0.95]
+    weight_decay: 0.1
+  scheduler: cosine
+  warmup_steps_pct: 0.02
+  grad_clip: 1.0
+  dropout: 0.1
+  batch_tokens: 3000000   # 3M effective, use grad accumulation
+objective:
+  # Single next-token objective; span infill via formatting
+  mode: next_token
+  enable_prefix_lm: true
+  enable_span_infill: true
+logging:
+  save_dir: ./ckpts/strict
+  log_interval_steps: 100
+accounting:
+  # enforce BabyLM word-exposure ceilings & checkpoint cadence
+  max_words_seen: 1000000000   # 1B for STRICT & MULTIMODAL
+  ckpt_milestones_words: [1e6,2e6,3e6,4e6,5e6,6e6,7e6,8e6,9e6,1e7,
+                          2e7,3e7,4e7,5e7,6e7,7e7,8e7,9e7,1e8]
